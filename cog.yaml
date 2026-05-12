@@ -1,0 +1,23 @@
+build:
+  gpu: true
+  cuda: "12.4"
+  python_version: "3.11"
+  python_packages:
+    - "torch==2.6.0"
+    - "torchvision==0.21.0"
+    - "huggingface_hub>=0.24.0"
+    - "deepforest==2.1.0"
+    - "numpy>=1.26.0"
+    - "pillow>=10.0.0"
+    - "pandas>=2.0.0"
+  system_packages:
+    - libgl1
+    - libglib2.0-0
+  run:
+    - command: python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='weecology/deepforest-livestock', local_dir='/src/weights/deepforest-livestock', token=open('/run/secrets/HF_TOKEN').read().strip())"
+      mounts:
+        - type: secret
+          id: HF_TOKEN
+          target: /run/secrets/HF_TOKEN
+
+predict: "predict.py:Predictor"

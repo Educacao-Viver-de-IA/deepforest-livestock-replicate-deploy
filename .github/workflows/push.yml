@@ -1,0 +1,56 @@
+name: Push to Replicate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "cog.yaml"
+      - "predict.py"
+      - "script/**"
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Free disk space on /
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Disk after cleanup
+        run: df -h /
+
+      - name: Install Cog v0.13.7
+        uses: replicate/setup-cog@v2
+        with:
+          cog-version: v0.13.7
+
+      - name: Docker login to r8.im
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+        run: |
+          echo "$REPLICATE_API_TOKEN" | docker login r8.im -u csviverdeia --password-stdin
+
+      - name: Push to Replicate
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "▶ Iniciando cog push (DeepForest Livestock ~200 MB)..."
+          cog push r8.im/csviverdeia/deepforest-livestock \
+            --secret id=HF_TOKEN,env=HF_TOKEN
+          echo "✅ Push concluído."
