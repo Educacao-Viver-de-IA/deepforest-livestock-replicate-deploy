@@ -29,8 +29,41 @@ class Predictor(BasePredictor):
         self.df_main = df_main
 
         print(f"[setup] loading model from local path... (t={time.time()-t0:.1f}s)", flush=True)
-        # Carrega usando from_pretrained do PyTorchModelHubMixin
-        self.model = df_main.deepforest.from_pretrained(WEIGHTS_DIR)
+        self.model = None
+        try:
+            # PyTorchModelHubMixin.from_pretrained aceita path local
+            self.model = df_main.deepforest.from_pretrained(WEIGHTS_DIR)
+            print(f"[setup] from_pretrained OK", flush=True)
+        except Exception as e:
+            print(f"[setup] from_pretrained falhou ({type(e).__name__}: {e})", flush=True)
+
+        if self.model is None:
+            # Fallback: cria deepforest vazio + load_state_dict manual
+            print(f"[setup] state_dict fallback...", flush=True)
+            try:
+                self.model = df_main.deepforest()
+                # Tenta achar o arquivo de pesos
+                weight_file = None
+                for fname in ("model.bin", "pytorch_model.bin", "model.safetensors", "model.pth"):
+                    p = os.path.join(WEIGHTS_DIR, fname)
+                    if os.path.exists(p):
+                        weight_file = p
+                        break
+                if weight_file is None:
+                    raise FileNotFoundError(f"Nenhum weight file em {WEIGHTS_DIR}: {os.listdir(WEIGHTS_DIR)}")
+                print(f"[setup] loading state from {weight_file}", flush=True)
+                if weight_file.endswith(".safetensors"):
+                    from safetensors.torch import load_file
+                    sd = load_file(weight_file)
+                else:
+                    sd = torch.load(weight_file, map_location="cpu", weights_only=False)
+                state = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
+                missing, unexpected = self.model.model.load_state_dict(state, strict=False)
+                print(f"[setup] state_dict load: {len(missing)} missing, {len(unexpected)} unexpected", flush=True)
+            except Exception as e2:
+                print(f"[setup] state_dict fallback FAILED: {type(e2).__name__}: {e2}", flush=True)
+                raise
+
         self.model.eval()
         if torch.cuda.is_available():
             self.model.model = self.model.model.cuda()
