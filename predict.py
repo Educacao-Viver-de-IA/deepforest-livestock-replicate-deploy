@@ -1,15 +1,25 @@
 import json
 import os
+import sys
 import time
 
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HOME"] = "/src/weights"
 
+print(f"[module] predict.py loading at t={time.time()}", flush=True)
+sys.stdout.flush()
+
 import numpy as np
+print(f"[module] numpy loaded", flush=True)
 import torch
+print(f"[module] torch {torch.__version__} loaded, cuda={torch.cuda.is_available()}", flush=True)
+sys.stdout.flush()
 from cog import BasePredictor, Input, Path
+print(f"[module] cog loaded", flush=True)
 from PIL import Image
+print(f"[module] PIL loaded", flush=True)
+sys.stdout.flush()
 
 WEIGHTS_DIR = "/src/weights/deepforest-livestock"
 
@@ -17,16 +27,31 @@ WEIGHTS_DIR = "/src/weights/deepforest-livestock"
 class Predictor(BasePredictor):
     def setup(self):
         t0 = time.time()
+        print(f"[setup] === START === t={t0}", flush=True)
+        sys.stdout.flush()
+        self.model = None
+        self.setup_error = None
         print(f"[setup] WEIGHTS_DIR={WEIGHTS_DIR}", flush=True)
         try:
             print(f"[setup] dir contents: {sorted(os.listdir(WEIGHTS_DIR))[:20]}", flush=True)
         except Exception as e:
             print(f"[setup] cannot list WEIGHTS_DIR: {e}", flush=True)
         print(f"[setup] cuda: {torch.cuda.is_available()}", flush=True)
+        sys.stdout.flush()
 
         print(f"[setup] importing deepforest... (t={time.time()-t0:.1f}s)", flush=True)
-        from deepforest import main as df_main
-        self.df_main = df_main
+        sys.stdout.flush()
+        try:
+            from deepforest import main as df_main
+            self.df_main = df_main
+            print(f"[setup] deepforest imported", flush=True)
+        except Exception as e:
+            import traceback
+            print(f"[setup] FATAL deepforest import: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            sys.stdout.flush()
+            self.setup_error = f"deepforest import failed: {e}"
+            return
 
         print(f"[setup] loading model from local path... (t={time.time()-t0:.1f}s)", flush=True)
         self.model = None
@@ -61,13 +86,18 @@ class Predictor(BasePredictor):
                 missing, unexpected = self.model.model.load_state_dict(state, strict=False)
                 print(f"[setup] state_dict load: {len(missing)} missing, {len(unexpected)} unexpected", flush=True)
             except Exception as e2:
+                import traceback
                 print(f"[setup] state_dict fallback FAILED: {type(e2).__name__}: {e2}", flush=True)
-                raise
+                traceback.print_exc()
+                sys.stdout.flush()
+                self.setup_error = f"model load failed: {e2}"
+                return
 
         self.model.eval()
         if torch.cuda.is_available():
             self.model.model = self.model.model.cuda()
         print(f"[setup] DONE (t={time.time()-t0:.1f}s)", flush=True)
+        sys.stdout.flush()
 
     def predict(
         self,
@@ -102,6 +132,8 @@ class Predictor(BasePredictor):
             choices=["detections", "summary"],
         ),
     ) -> str:
+        if self.model is None:
+            return json.dumps({"error": f"Modelo não carregou: {getattr(self, 'setup_error', 'unknown')}"})
         path_str = str(image)
         print(f"[predict] image={path_str} patch_size={patch_size}", flush=True)
 
