@@ -54,44 +54,84 @@ class Predictor(BasePredictor):
             return
 
         print(f"[setup] loading model from local path... (t={time.time()-t0:.1f}s)", flush=True)
+        sys.stdout.flush()
         self.model = None
-        try:
-            # PyTorchModelHubMixin.from_pretrained aceita path local
-            self.model = df_main.deepforest.from_pretrained(WEIGHTS_DIR)
-            print(f"[setup] from_pretrained OK", flush=True)
-        except Exception as e:
-            print(f"[setup] from_pretrained falhou ({type(e).__name__}: {e})", flush=True)
 
-        if self.model is None:
-            # Fallback: cria deepforest vazio + load_state_dict manual
-            print(f"[setup] state_dict fallback...", flush=True)
-            try:
-                self.model = df_main.deepforest()
-                # Tenta achar o arquivo de pesos
-                weight_file = None
-                for fname in ("model.bin", "pytorch_model.bin", "model.safetensors", "model.pth"):
-                    p = os.path.join(WEIGHTS_DIR, fname)
-                    if os.path.exists(p):
-                        weight_file = p
-                        break
-                if weight_file is None:
-                    raise FileNotFoundError(f"Nenhum weight file em {WEIGHTS_DIR}: {os.listdir(WEIGHTS_DIR)}")
-                print(f"[setup] loading state from {weight_file}", flush=True)
-                if weight_file.endswith(".safetensors"):
-                    from safetensors.torch import load_file
-                    sd = load_file(weight_file)
-                else:
-                    sd = torch.load(weight_file, map_location="cpu", weights_only=False)
-                state = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
-                missing, unexpected = self.model.model.load_state_dict(state, strict=False)
-                print(f"[setup] state_dict load: {len(missing)} missing, {len(unexpected)} unexpected", flush=True)
-            except Exception as e2:
-                import traceback
-                print(f"[setup] state_dict fallback FAILED: {type(e2).__name__}: {e2}", flush=True)
-                traceback.print_exc()
-                sys.stdout.flush()
-                self.setup_error = f"model load failed: {e2}"
-                return
+        # Acha o weight file primeiro (independente do método de load)
+        weight_file = None
+        try:
+            files = sorted(os.listdir(WEIGHTS_DIR))
+            print(f"[setup] WEIGHTS_DIR files: {files}", flush=True)
+            for fname in ("model.bin", "pytorch_model.bin", "model.safetensors", "model.pth", "model.pt"):
+                p = os.path.join(WEIGHTS_DIR, fname)
+                if os.path.exists(p):
+                    weight_file = p
+                    break
+        except Exception as e:
+            print(f"[setup] erro listando weights: {e}", flush=True)
+
+        if weight_file is None:
+            self.setup_error = f"Nenhum weight file encontrado em {WEIGHTS_DIR}"
+            print(f"[setup] FATAL: {self.setup_error}", flush=True)
+            return
+
+        print(f"[setup] weight file: {weight_file}", flush=True)
+        # Carrega state_dict
+        try:
+            if weight_file.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                sd = load_file(weight_file)
+            else:
+                sd = torch.load(weight_file, map_location="cpu", weights_only=False)
+            print(f"[setup] state_dict type: {type(sd)} | keys sample: {list(sd.keys())[:5] if isinstance(sd,dict) else 'tensor'}", flush=True)
+            state = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
+        except Exception as e:
+            self.setup_error = f"falha ao carregar state_dict: {e}"
+            print(f"[setup] FATAL: {self.setup_error}", flush=True)
+            import traceback; traceback.print_exc()
+            sys.stdout.flush()
+            return
+
+        # Instancia deepforest sem trigger de download HF Hub
+        # df_main.deepforest() construtor tenta baixar checkpoint default — patch isso
+        try:
+            # Constrói o RetinaNet torchvision diretamente (bypass do deepforest's default download)
+            print(f"[setup] building RetinaNet via torchvision...", flush=True)
+            from torchvision.models.detection import retinanet_resnet50_fpn_v2
+            from torchvision.models.detection.retinanet import RetinaNetHead
+            from torchvision.models.detection.anchor_utils import AnchorGenerator
+
+            # Recupera num_classes do state_dict (head shape)
+            num_classes_inferred = 2  # default = 1 class + background
+            for k, v in state.items():
+                if "classification_head.cls_logits.weight" in k or "head.classification.weight" in k:
+                    # shape: [num_anchors*num_classes, in_channels, ...]
+                    num_classes_inferred = max(num_classes_inferred, v.shape[0] // 9)  # 9 anchors típico
+                    print(f"[setup] inferred num_classes={num_classes_inferred} from {k} shape={list(v.shape)}", flush=True)
+                    break
+
+            tv_model = retinanet_resnet50_fpn_v2(weights=None, weights_backbone=None, num_classes=num_classes_inferred)
+            print(f"[setup] torchvision RetinaNet OK", flush=True)
+
+            # Load state_dict no torchvision model
+            missing, unexpected = tv_model.load_state_dict(state, strict=False)
+            print(f"[setup] state_dict load: {len(missing)} missing, {len(unexpected)} unexpected", flush=True)
+            if missing[:3]: print(f"  missing: {missing[:3]}", flush=True)
+            if unexpected[:3]: print(f"  unexpected: {unexpected[:3]}", flush=True)
+
+            # Cria wrapper deepforest VAZIO sem trigger download
+            # Monkey-patch antes de instanciar
+            print(f"[setup] criando deepforest wrapper...", flush=True)
+            self.model = df_main.deepforest()
+            self.model.model = tv_model  # substitui o backbone interno
+            print(f"[setup] deepforest wrapper OK", flush=True)
+        except Exception as e2:
+            import traceback
+            print(f"[setup] build FAILED: {type(e2).__name__}: {e2}", flush=True)
+            traceback.print_exc()
+            sys.stdout.flush()
+            self.setup_error = f"build failed: {e2}"
+            return
 
         self.model.eval()
         if torch.cuda.is_available():
