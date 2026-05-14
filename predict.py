@@ -134,8 +134,10 @@ class Predictor(BasePredictor):
         try:
             print(f"[setup] building torchvision RetinaNet... (t={time.time()-t0:.1f}s)", flush=True)
             sys.stdout.flush()
-            from torchvision.models.detection import retinanet_resnet50_fpn_v2
-            tv_model = retinanet_resnet50_fpn_v2(
+            # DeepForest 2.x usa RetinaNet V1 (FPN ResNet50). V2 tem fpn extra_blocks com out_channels=256
+            # mas o V1 tem out_channels=2048. Checkpoint do deepforest é treinado em V1.
+            from torchvision.models.detection import retinanet_resnet50_fpn
+            tv_model = retinanet_resnet50_fpn(
                 weights=None, weights_backbone=None, num_classes=num_classes,
             )
             print(f"[setup] tv_model built. Loading state_dict (strict=False)...", flush=True)
